@@ -37,9 +37,6 @@ distributed telemetry systems via modern web and cloud-native tooling
 
 StratoAgentic comprises full stack:
 
-<<<<<<< Updated upstream
-    stratoagentic/
-=======
 - AOI-scoped telemetry ingestion
 - real-time aircraft state streaming
 - altitude-aware 2D and 3D visualization
@@ -154,7 +151,6 @@ FAA charts are public domain works of the United States Government.
 
 ```text
 OpenSky API
->>>>>>> Stashed changes
     │
     ├── web/        # React + Webpack + Cesium frontend
     │
