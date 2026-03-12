@@ -94,9 +94,9 @@ Aircraft rendered on a Cesium globe with altitude-aware positioning and heading 
 
 ![StratoAgentic Raster View](media/tile-raster-1.png)
 
-![StratoAgentic Raster View](media/tiles-raster.png)
-
 ![StratoAgentic Raster View](media/tile-raster-2.png)
+
+![StratoAgentic Raster View](media/tiles-raster.png)
 
 ![StratoAgentic Raster View](media/tile-raster-3.png)
 
