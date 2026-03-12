@@ -1,4 +1,3 @@
-
 **StratoAgentic** is a geospatial visualization prototype for monitoring
 aircraft telemetry within a defined airspace region
 
