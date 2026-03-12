@@ -16,6 +16,30 @@ The system shows how heterogeneous geospatial data sources can be integrated int
 
 It also showcases a basic starting point for:
 
+-   **AOI-scoped data streaming**
+-   **Zoom-gated rendering on a 3D globe**
+-   **Real-time telemetry ingestion**
+-   **Server-side geospatial APIs**
+-   **3D geospatial visualization using Cesium**
+
+The application renders aircraft activity near **Atlanta
+Hartsfield--Jackson International Airport (ATL)** on a 3D globe using
+**Cesium**, with **Go backend** to aggregate and normalise flight
+telemetry data
+
+This project is a **portfolio demonstration for geospatial
+infrastructure engineering** of how to efficiently visualise 
+distributed telemetry systems via modern web and cloud-native tooling
+
+------------------------------------------------------------------------
+
+# Architecture Overview
+
+StratoAgentic comprises full stack:
+
+<<<<<<< Updated upstream
+    stratoagentic/
+=======
 - AOI-scoped telemetry ingestion
 - real-time aircraft state streaming
 - altitude-aware 2D and 3D visualization
@@ -40,9 +64,9 @@ StratoAgentic currently includes **three primary frontend views**:
 
 ## 2D Map Vew Screenshots
 
-![StratoAgentic 2D Map](media/2d-map.png)
+![StratoAgentic 2D Map](media/2D-map.png)
 
-![StratoAgentic 2D Map](media/2d-map-2.png)
+![StratoAgentic 2D Map](media/2D-map-2.png)
 
 Live aircraft telemetry rendered over a dark MapLibre base map
 Aircraft icons rotate according to heading and display callsign labels
@@ -130,84 +154,13 @@ FAA charts are public domain works of the United States Government.
 
 ```text
 OpenSky API
+>>>>>>> Stashed changes
     │
-    │ polling / normalization
-    ▼
-Go Backend
-(OpenSky client + snapshot store + stream hub + raster serving)
+    ├── web/        # React + Webpack + Cesium frontend
     │
-    ├── REST endpoints
-    ├── WebSocket stream
-    └── Raster tile hosting
-    ▼
-React Frontend
+    ├── server/     # Go API service
     │
-    ├── 2D Map (MapLibre)
-    ├── 3D Globe (Cesium)
-    └── Tiles Raster (MapLibre image overlays)
-```
-
----
-
-## Repository structure
-
-```text
-stratoagentic/
-│
-├── README.md
-│
-├── backend/
-│   ├── go.mod
-│   ├── go.sum
-│   ├── cmd/
-│   │   └── api/
-│   │       └── main.go
-│   ├── internal/
-│   │   ├── config/
-│   │   ├── db/
-│   │   ├── httpapi/
-│   │   ├── mongo/
-│   │   ├── opensky/
-│   │   └── stream/
-│   └── migrations/
-│       └── 001_init.sql
-│
-├── frontend/
-│   ├── package.json
-│   ├── package-lock.json
-│   ├── tsconfig.json
-│   ├── webpack.config.js
-│   ├── public/
-│   │   └── index.html
-│   └── src/
-│       ├── index.tsx
-│       ├── App.tsx
-│       ├── Globe3D.tsx
-│       ├── Map2D.tsx
-│       ├── RasterView.tsx
-│       ├── icons.ts
-│       ├── styles.css
-│       ├── types.ts
-│       ├── useInterpolatedFlights.ts
-│       ├── ws.ts
-│       └── global.d.ts
-│
-├── docker/
-│   ├── docker-compose.yml
-│   ├── backend/
-│   │   └── Dockerfile
-│   └── frontend/
-│       └── Dockerfile
-│
-└── cpp/
-    └── raster-tiler/
-        ├── main.cpp
-        ├── CMakeLists.txt
-        └── README.md
-```
-
-
----
+    └── README.md
 
 ## Frontend details
 
