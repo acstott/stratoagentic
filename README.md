@@ -74,9 +74,7 @@ Aircraft icons rotate according to heading and display callsign labels
    - short forward heading rays instead of looping arcs
    - initial camera fit to the active aircraft cluster
 
-## 3D Globe View Screenshots  
-
-![StratoAgentic 3D Globe](media/3D.png)
+## 3D Globe View Screenshots - Increasing Zoom in Cesium Viewer
 
 ![StratoAgentic 3D Globe](media/3D1.png)
 
@@ -94,9 +92,9 @@ Aircraft rendered on a Cesium globe with altitude-aware positioning and heading 
 
 ## Raster View Screenshots
 
-![StratoAgentic Raster View](media/tiles-raster.png)
-
 ![StratoAgentic Raster View](media/tile-raster-1.png)
+
+![StratoAgentic Raster View](media/tiles-raster.png)
 
 ![StratoAgentic Raster View](media/tile-raster-2.png)
 
