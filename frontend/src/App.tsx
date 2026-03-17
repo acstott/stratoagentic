@@ -4,9 +4,32 @@ import Map2D from "./Map2D";
 import RasterView from "./RasterView";
 import { useInterpolatedFlights } from "./useInterpolatedFlights";
 import { connectSnapshotStream } from "./ws";
-import type { FlightPoint, Snapshot, StateVector } from "./types";
+import type { FlightPoint, Snapshot } from "./types";
+import { classifyFlight, FLIGHT_COLORS } from "./flightStyle";
 
 type ViewMode = "map2d" | "globe" | "raster";
+type LegendCategory = keyof typeof FLIGHT_COLORS;
+
+type LegacyStateVectorLike = {
+  icao24?: string;
+  callsign?: string | null;
+  origin_country?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  on_ground?: boolean;
+  geo_altitude?: number | null;
+  baro_altitude?: number | null;
+  velocity?: number | null;
+  true_track?: number | null;
+  vertical_rate?: number | null;
+};
+
+const LEGEND_LABELS: Record<LegendCategory, string> = Object.fromEntries(
+  Object.keys(FLIGHT_COLORS).map((key) => [
+    key,
+    formatLegendLabel(key),
+  ])
+) as Record<LegendCategory, string>;
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -30,7 +53,7 @@ export default function App() {
         console.warn("initial snapshot fetch failed", err);
       });
 
-    const ws = connectSnapshotStream((data) => {
+    const ws = connectSnapshotStream((data: Snapshot) => {
       if (closed) return;
       setSnapshot(data);
       setStatus("connected");
@@ -55,25 +78,11 @@ export default function App() {
   }, []);
 
   const rawPoints: FlightPoint[] = useMemo(() => {
-    const flights = snapshot?.flights ?? [];
+    const flights = Array.isArray(snapshot?.flights) ? snapshot!.flights : [];
 
     return flights
-      .filter(
-        (f: StateVector) =>
-          typeof f.latitude === "number" && typeof f.longitude === "number"
-      )
-      .map((f: StateVector) => ({
-        id: f.icao24,
-        icao24: f.icao24,
-        callsign: (f.callsign ?? "").trim(),
-        country: f.origin_country,
-        lat: f.latitude as number,
-        lon: f.longitude as number,
-        onGround: f.on_ground,
-        alt: f.geo_altitude ?? f.baro_altitude,
-        vel: f.velocity,
-        track: f.true_track,
-      }));
+      .map((item, index) => toFlightPoint(item, index))
+      .filter((p): p is FlightPoint => p !== null);
   }, [snapshot]);
 
   const points = useInterpolatedFlights({
@@ -85,6 +94,21 @@ export default function App() {
     () => rawPoints.filter((p) => !p.onGround).length,
     [rawPoints]
   );
+
+  const categoryCounts = useMemo(() => {
+    const counts = Object.fromEntries(
+      (Object.keys(FLIGHT_COLORS) as LegendCategory[]).map((key) => [key, 0])
+    ) as Record<LegendCategory, number>;
+
+    for (const p of rawPoints) {
+      const category = classifyFlight(p) as LegendCategory;
+      if (category in counts) {
+        counts[category] += 1;
+      }
+    }
+
+    return counts;
+  }, [rawPoints]);
 
   return (
     <div style={styles.page}>
@@ -101,6 +125,12 @@ export default function App() {
                 <span>OpenSky time: {snapshot.time}</span>
                 <span>|</span>
                 <span>Last update: {formatRelative(snapshot.updatedAt)}</span>
+                {snapshot.isStale && (
+                  <>
+                    <span>|</span>
+                    <span>Snapshot is stale</span>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -177,12 +207,25 @@ export default function App() {
                   Backend WS endpoint is /stream.
                 </div>
               </div>
-            ) : view === "globe" ? (
-              <Globe3D points={points} />
-            ) : view === "raster" ? (
-              <RasterView points={points} />
+            ) : rawPoints.length === 0 ? (
+              <div style={styles.loadingBox}>
+                No valid flight positions to render.
+                <div style={styles.loadingSubtext}>
+                  Snapshot received, but no rows contained usable coordinates.
+                </div>
+              </div>
             ) : (
-              <Map2D points={points} />
+              <>
+                {view === "globe" ? (
+                  <Globe3D points={points} />
+                ) : view === "raster" ? (
+                  <RasterView points={points} />
+                ) : (
+                  <Map2D points={points} />
+                )}
+
+                <FlightLegend counts={categoryCounts} />
+              </>
             )}
           </div>
         </section>
@@ -202,6 +245,7 @@ export default function App() {
                   <th style={styles.th}>Alt(m)</th>
                   <th style={styles.th}>Vel(m/s)</th>
                   <th style={styles.th}>Track</th>
+                  <th style={styles.th}>Vert Rate</th>
                   <th style={styles.th}>On ground</th>
                 </tr>
               </thead>
@@ -216,6 +260,7 @@ export default function App() {
                     <td style={styles.td}>{fmtNullable(p.alt)}</td>
                     <td style={styles.td}>{fmtNullable(p.vel)}</td>
                     <td style={styles.td}>{fmtNullable(p.track)}</td>
+                    <td style={styles.td}>{fmtNullable(p.vertRate)}</td>
                     <td style={styles.td}>{String(p.onGround)}</td>
                   </tr>
                 ))}
@@ -228,12 +273,138 @@ export default function App() {
   );
 }
 
-function fmt(n: number): string {
-  return n.toFixed(3);
+function FlightLegend({
+  counts,
+}: {
+  counts: Record<LegendCategory, number>;
+}) {
+  const items = Object.keys(FLIGHT_COLORS) as LegendCategory[];
+
+  return (
+    <div style={styles.legendCard}>
+      <div style={styles.legendTitle}>Aircraft legend</div>
+      {items.map((key) => (
+        <div key={key} style={styles.legendRow}>
+          <span
+            style={{
+              ...styles.legendIcon,
+              color: FLIGHT_COLORS[key],
+            }}
+          >
+            ✈
+          </span>
+          <span style={styles.legendLabel}>{LEGEND_LABELS[key]}</span>
+          <span style={styles.legendCount}>{counts[key]}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-function fmtNullable(n: number | null): string {
-  return typeof n === "number" ? n.toFixed(1) : "-";
+function formatLegendLabel(key: string): string {
+  const lower = key.toLowerCase();
+
+  if (lower === "parked") return "On ground / parked";
+  if (lower.includes("ground")) return "On ground / parked";
+  if (lower.includes("low")) return "Low altitude";
+  if (lower.includes("medium") || lower.includes("mid")) return "Medium altitude";
+  if (lower.includes("high")) return "High altitude";
+
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function toFlightPoint(value: unknown, index: number): FlightPoint | null {
+  if (!value || typeof value !== "object") return null;
+
+  const v = value as Partial<FlightPoint> & LegacyStateVectorLike;
+
+  const lat =
+    typeof v.lat === "number" && Number.isFinite(v.lat)
+      ? v.lat
+      : typeof v.latitude === "number" && Number.isFinite(v.latitude)
+        ? v.latitude
+        : null;
+
+  const lon =
+    typeof v.lon === "number" && Number.isFinite(v.lon)
+      ? v.lon
+      : typeof v.longitude === "number" && Number.isFinite(v.longitude)
+        ? v.longitude
+        : null;
+
+  if (lat === null || lon === null) return null;
+
+  const icao24 =
+    typeof v.icao24 === "string" && v.icao24.trim()
+      ? v.icao24.trim()
+      : `unknown-${index}`;
+
+  const callsign = typeof v.callsign === "string" ? v.callsign.trim() : "";
+
+  const country =
+    typeof v.country === "string"
+      ? v.country
+      : typeof v.origin_country === "string"
+        ? v.origin_country
+        : "";
+
+  const onGround =
+    typeof v.onGround === "boolean" ? v.onGround : Boolean(v.on_ground);
+
+  const alt =
+    typeof v.alt === "number" && Number.isFinite(v.alt)
+      ? v.alt
+      : typeof v.geo_altitude === "number" && Number.isFinite(v.geo_altitude)
+        ? v.geo_altitude
+        : typeof v.baro_altitude === "number" && Number.isFinite(v.baro_altitude)
+          ? v.baro_altitude
+          : null;
+
+  const vel =
+    typeof v.vel === "number" && Number.isFinite(v.vel)
+      ? v.vel
+      : typeof v.velocity === "number" && Number.isFinite(v.velocity)
+        ? v.velocity
+        : null;
+
+  const track =
+    typeof v.track === "number" && Number.isFinite(v.track)
+      ? v.track
+      : typeof v.true_track === "number" && Number.isFinite(v.true_track)
+        ? v.true_track
+        : null;
+
+  const vertRate =
+    typeof v.vertRate === "number" && Number.isFinite(v.vertRate)
+      ? v.vertRate
+      : typeof v.vertical_rate === "number" && Number.isFinite(v.vertical_rate)
+        ? v.vertical_rate
+        : null;
+
+  return {
+    id: typeof v.id === "string" && v.id.trim() ? v.id : icao24,
+    icao24,
+    callsign,
+    country,
+    lat,
+    lon,
+    onGround,
+    alt,
+    vel,
+    track,
+    vertRate,
+  };
+}
+
+function fmt(n: number | null | undefined): string {
+  return typeof n === "number" && Number.isFinite(n) ? n.toFixed(3) : "-";
+}
+
+function fmtNullable(n: number | null | undefined): string {
+  return typeof n === "number" && Number.isFinite(n) ? n.toFixed(1) : "-";
 }
 
 function formatRelative(iso: string): string {
@@ -354,8 +525,13 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#4b5563",
   },
   mapFrame: {
+    position: "relative",
+    minHeight: "520px",
+    height: "60vh",
+    maxHeight: "720px",
     borderRadius: "14px",
     overflow: "hidden",
+    background: "#0f172a",
   },
   loadingBox: {
     minHeight: "520px",
@@ -370,6 +546,47 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "8px",
     color: "#9ca3af",
     fontSize: "14px",
+  },
+  legendCard: {
+    position: "absolute",
+    right: "16px",
+    bottom: "16px",
+    zIndex: 20,
+    minWidth: "210px",
+    background: "rgba(15, 23, 42, 0.92)",
+    border: "1px solid rgba(255,255,255,0.10)",
+    borderRadius: "12px",
+    padding: "12px 14px",
+    boxShadow: "0 10px 24px rgba(0,0,0,0.28)",
+    backdropFilter: "blur(8px)",
+    pointerEvents: "none",
+  },
+  legendTitle: {
+    fontSize: "14px",
+    fontWeight: 700,
+    color: "#f3f4f6",
+    marginBottom: "8px",
+  },
+  legendRow: {
+    display: "grid",
+    gridTemplateColumns: "22px 1fr auto",
+    alignItems: "center",
+    gap: "8px",
+    marginBottom: "6px",
+  },
+  legendIcon: {
+    fontSize: "15px",
+    lineHeight: 1,
+    display: "inline-block",
+  },
+  legendLabel: {
+    color: "#d1d5db",
+    fontSize: "13px",
+  },
+  legendCount: {
+    color: "#9ca3af",
+    fontSize: "12px",
+    fontWeight: 700,
   },
   tableHeader: {
     color: "#f3f4f6",

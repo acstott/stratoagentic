@@ -1,8 +1,13 @@
 import React, { useEffect, useRef } from "react";
 import maplibregl, { LngLatBoundsLike, Map } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { getGroundPlaneDataUrl, getPlaneDataUrl } from "./icons";
+import { getPlaneDataUrl } from "./icons";
 import type { FlightPoint } from "./types";
+import {
+  altitudeVisualScale,
+  classifyFlight,
+  FLIGHT_COLORS,
+} from "./flightStyle";
 
 type Props = {
   points: FlightPoint[];
@@ -45,19 +50,22 @@ export default function Map2D({ points }: Props) {
           source: "flights",
           layout: {
             "icon-image": [
-              "case",
-              ["get", "onGround"],
-              "plane-ground",
-              "plane-air",
+              "match",
+              ["get", "category"],
+              "arrival",
+              "plane-arrival",
+              "departure",
+              "plane-departure",
+              "plane-parked",
             ],
             "icon-size": [
               "interpolate",
               ["linear"],
-              ["zoom"],
-              5, 0.45,
-              7, 0.6,
-              10, 0.85,
-              13, 1.05,
+              ["coalesce", ["get", "iconScale"], 0.9],
+              0.78, 0.50,
+              0.95, 0.68,
+              1.20, 0.88,
+              1.42, 1.05,
             ],
             "icon-rotate": ["-", ["coalesce", ["get", "track"], 0], 90],
             "icon-rotation-alignment": "map",
@@ -91,27 +99,37 @@ export default function Map2D({ points }: Props) {
     const map = mapRef.current;
     if (!map) return;
 
-    const source = map.getSource("flights") as maplibregl.GeoJSONSource | undefined;
+    const source = map.getSource("flights") as
+      | maplibregl.GeoJSONSource
+      | undefined;
+
     if (!source) return;
 
     source.setData({
       type: "FeatureCollection",
-      features: points.map((p) => ({
-        type: "Feature",
-        geometry: {
-          type: "Point",
-          coordinates: [p.lon, p.lat],
-        },
-        properties: {
-          id: p.id,
-          icao24: p.icao24,
-          callsign: p.callsign,
-          onGround: p.onGround,
-          alt: p.alt,
-          vel: p.vel,
-          track: p.track ?? 0,
-        },
-      })),
+      features: points.map((p) => {
+        const category = classifyFlight(p);
+
+        return {
+          type: "Feature" as const,
+          geometry: {
+            type: "Point" as const,
+            coordinates: [p.lon, p.lat],
+          },
+          properties: {
+            id: p.id,
+            icao24: p.icao24,
+            callsign: p.callsign,
+            onGround: p.onGround,
+            alt: p.alt,
+            vel: p.vel,
+            track: p.track ?? 0,
+            vertRate: p.vertRate ?? null,
+            category,
+            iconScale: altitudeVisualScale(p.alt, p.onGround),
+          },
+        };
+      }),
     });
 
     if (!hasDoneInitialFitRef.current && points.length > 0) {
@@ -127,12 +145,7 @@ export default function Map2D({ points }: Props) {
     }
   }, [points]);
 
-  return (
-    <div
-      ref={divRef}
-      style={{ height: 520, borderRadius: 16, overflow: "hidden" }}
-    />
-  );
+  return <div ref={divRef} style={{ width: "100%", height: "100%" }} />;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -145,17 +158,22 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 async function loadPlaneIcons(map: Map) {
-  const [air, ground] = await Promise.all([
-    loadImage(getPlaneDataUrl("#67e8f9")),
-    loadImage(getGroundPlaneDataUrl("#f59e0b")),
+  const [arrival, departure, parked] = await Promise.all([
+    loadImage(getPlaneDataUrl(FLIGHT_COLORS.arrival)),
+    loadImage(getPlaneDataUrl(FLIGHT_COLORS.departure)),
+    loadImage(getPlaneDataUrl(FLIGHT_COLORS.parked)),
   ]);
 
-  if (!map.hasImage("plane-air")) {
-    map.addImage("plane-air", air, { pixelRatio: 2 });
+  if (!map.hasImage("plane-arrival")) {
+    map.addImage("plane-arrival", arrival, { pixelRatio: 2 });
   }
 
-  if (!map.hasImage("plane-ground")) {
-    map.addImage("plane-ground", ground, { pixelRatio: 2 });
+  if (!map.hasImage("plane-departure")) {
+    map.addImage("plane-departure", departure, { pixelRatio: 2 });
+  }
+
+  if (!map.hasImage("plane-parked")) {
+    map.addImage("plane-parked", parked, { pixelRatio: 2 });
   }
 }
 

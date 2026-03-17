@@ -6,98 +6,135 @@ type UseInterpolatedFlightsArgs = {
   durationMs?: number;
 };
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function lerpAngle(a: number, b: number, t: number) {
-  const delta = ((((b - a) % 360) + 540) % 360) - 180;
-  return (a + delta * t + 360) % 360;
-}
+type FlightPointMap = Map<string, FlightPoint>;
 
 export function useInterpolatedFlights({
   points,
   durationMs = 1200,
 }: UseInterpolatedFlightsArgs): FlightPoint[] {
-  const [rendered, setRendered] = useState<FlightPoint[]>(points);
+  const previousPointsRef = useRef<FlightPointMap>(new Map());
+  const targetPointsRef = useRef<FlightPointMap>(new Map());
+  const animationFrameRef = useRef<number | null>(null);
+  const animationStartRef = useRef<number>(0);
 
-  const previousRef = useRef<Map<string, FlightPoint>>(new Map());
-  const frameRef = useRef<number | null>(null);
-  const startRef = useRef<number>(0);
-
-  const pointsKey = useMemo(
-    () =>
-      points
-        .map(
-          (p) =>
-            `${p.id}:${p.lat}:${p.lon}:${p.alt ?? "na"}:${p.track ?? "na"}:${p.onGround}`
-        )
-        .join("|"),
-    [points]
-  );
+  const [progress, setProgress] = useState(1);
 
   useEffect(() => {
-    const prevMap = new Map(rendered.map((p) => [p.id, p]));
-    previousRef.current = prevMap;
-    startRef.current = performance.now();
+    const prevMap = targetPointsRef.current.size
+      ? targetPointsRef.current
+      : previousPointsRef.current;
 
-    if (frameRef.current != null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
+    const nextPrevMap: FlightPointMap = new Map();
+    const nextTargetMap: FlightPointMap = new Map();
+
+    for (const point of points) {
+      const prev = prevMap.get(point.id) ?? point;
+      nextPrevMap.set(point.id, prev);
+      nextTargetMap.set(point.id, point);
     }
 
-    const animate = (now: number) => {
-      const elapsed = now - startRef.current;
-      const t = Math.min(1, elapsed / durationMs);
+    previousPointsRef.current = nextPrevMap;
+    targetPointsRef.current = nextTargetMap;
 
-      const next: FlightPoint[] = points.map((target) => {
-        const prev = prevMap.get(target.id);
-        if (!prev) return target;
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
 
-        return {
-          ...target,
-          lat: lerp(prev.lat, target.lat, t),
-          lon: lerp(prev.lon, target.lon, t),
-          alt:
-            typeof prev.alt === "number" && typeof target.alt === "number"
-              ? lerp(prev.alt, target.alt, t)
-              : target.alt,
-          vel:
-            typeof prev.vel === "number" && typeof target.vel === "number"
-              ? lerp(prev.vel, target.vel, t)
-              : target.vel,
-          track:
-            typeof prev.track === "number" &&
-            typeof target.track === "number"
-              ? lerpAngle(prev.track, target.track, t)
-              : target.track,
-        };
-      });
+    animationStartRef.current = performance.now();
+    setProgress(0);
 
-      setRendered(next);
+    const tick = (now: number) => {
+      const elapsed = now - animationStartRef.current;
+      const nextProgress = Math.min(1, elapsed / durationMs);
+      setProgress(nextProgress);
 
-      if (t < 1) {
-        frameRef.current = requestAnimationFrame(animate);
+      if (nextProgress < 1) {
+        animationFrameRef.current = requestAnimationFrame(tick);
       } else {
-        frameRef.current = null;
+        animationFrameRef.current = null;
       }
     };
 
-    frameRef.current = requestAnimationFrame(animate);
+    animationFrameRef.current = requestAnimationFrame(tick);
 
     return () => {
-      if (frameRef.current != null) {
-        cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
       }
     };
-  }, [pointsKey, durationMs]);
+  }, [points, durationMs]);
 
-  useEffect(() => {
-    if (points.length === 0) {
-      setRendered([]);
+  return useMemo(() => {
+    const eased = easeInOutCubic(progress);
+    const out: FlightPoint[] = [];
+
+    for (const [id, target] of targetPointsRef.current.entries()) {
+      const previous = previousPointsRef.current.get(id) ?? target;
+
+      out.push({
+        ...target,
+        lat: interpolate(previous.lat, target.lat, eased),
+        lon: interpolateLon(previous.lon, target.lon, eased),
+        alt: interpolateNullable(previous.alt, target.alt, eased),
+        vel: interpolateNullable(previous.vel, target.vel, eased),
+        track: interpolateTrack(previous.track, target.track, eased),
+
+        // Preserve backend-provided metadata / classification inputs directly.
+        onGround: target.onGround,
+        callsign: target.callsign,
+        country: target.country,
+        icao24: target.icao24,
+        vertRate: target.vertRate ?? null,
+      });
     }
-  }, [points.length]);
 
-  return rendered;
+    return out;
+  }, [progress, points]);
+}
+
+function interpolate(start: number, end: number, t: number): number {
+  return start + (end - start) * t;
+}
+
+function interpolateNullable(
+  start: number | null | undefined,
+  end: number | null | undefined,
+  t: number
+): number | null {
+  if (typeof end !== "number") return null;
+  if (typeof start !== "number") return end;
+  return interpolate(start, end, t);
+}
+
+function interpolateTrack(
+  start: number | null | undefined,
+  end: number | null | undefined,
+  t: number
+): number | null {
+  if (typeof end !== "number") return null;
+  if (typeof start !== "number") return end;
+
+  let delta = end - start;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+
+  const value = start + delta * t;
+  return ((value % 360) + 360) % 360;
+}
+
+function interpolateLon(start: number, end: number, t: number): number {
+  let delta = end - start;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+
+  const value = start + delta * t;
+  return ((value + 540) % 360) - 180;
+}
+
+function easeInOutCubic(t: number): number {
+  if (t < 0.5) {
+    return 4 * t * t * t;
+  }
+  return 1 - Math.pow(-2 * t + 2, 3) / 2;
 }

@@ -1,18 +1,33 @@
 import React, { useEffect, useRef } from "react";
 import * as Cesium from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import { getGroundPlaneDataUrl, getPlaneDataUrl } from "./icons";
+
 import type { FlightPoint } from "./types";
+import { getPlaneDataUrl } from "./icons";
+import {
+  ATL,
+  classifyFlight,
+  FLIGHT_COLORS,
+  globeCenteredAltitudeMeters,
+  globeVectorLengthMeters,
+  normalizeAltitudeMeters,
+  projectForwardWgs84,
+  vectorEndAltitudeMeters,
+  type FlightCategory,
+} from "./flightStyle";
 
 type Props = {
   points: FlightPoint[];
 };
 
+type OverlayState = {
+  dataSource: Cesium.CustomDataSource;
+};
+
 export default function Globe3D({ points }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
-  const entitiesRef = useRef<Map<string, Cesium.Entity>>(new Map());
-  const hasInitialZoomRef = useRef(false);
+  const overlayRef = useRef<OverlayState | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return;
@@ -37,19 +52,31 @@ export default function Globe3D({ points }: Props) {
     viewer.scene.globe.enableLighting = true;
     viewer.clock.shouldAnimate = false;
 
+    const dataSource = new Cesium.CustomDataSource("flight-vectors");
+    viewer.dataSources.add(dataSource);
+
     viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(-84.4277, 33.6407, 650000),
+      destination: Cesium.Cartesian3.fromDegrees(
+        ATL.lon,
+        ATL.lat,
+        globeCenteredAltitudeMeters()
+      ),
       orientation: {
         heading: 0,
-        pitch: Cesium.Math.toRadians(-55),
+        pitch: Cesium.Math.toRadians(-42),
         roll: 0,
       },
       duration: 0,
     });
 
     viewerRef.current = viewer;
+    overlayRef.current = { dataSource };
+
+    viewer.scene.requestRender();
 
     return () => {
+      viewer.dataSources.remove(dataSource, true);
+      overlayRef.current = null;
       viewer.destroy();
       viewerRef.current = null;
     };
@@ -57,120 +84,10 @@ export default function Globe3D({ points }: Props) {
 
   useEffect(() => {
     const viewer = viewerRef.current;
-    if (!viewer) return;
+    const overlay = overlayRef.current;
+    if (!viewer || !overlay) return;
 
-    const entityMap = entitiesRef.current;
-    const entities = viewer.entities;
-
-    for (const p of points) {
-      const altitude = normalizeAltitudeMeters(p);
-      const position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, altitude);
-
-      let entity = entityMap.get(p.id);
-
-      if (!entity) {
-        entity = entities.add({
-          id: p.id,
-          position,
-          billboard: {
-            image: p.onGround
-              ? getGroundPlaneDataUrl("#f59e0b")
-              : getPlaneDataUrl("#67e8f9"),
-            scale: p.onGround ? 0.75 : 0.85,
-            verticalOrigin: Cesium.VerticalOrigin.CENTER,
-            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-            rotation: Cesium.Math.toRadians((p.track ?? 0) - 90),
-            alignedAxis: Cesium.Cartesian3.UNIT_Z,
-            scaleByDistance: new Cesium.NearFarScalar(50000, 1.0, 2500000, 0.45),
-            translucencyByDistance: new Cesium.NearFarScalar(100000, 1.0, 3000000, 0.85),
-            eyeOffset: new Cesium.Cartesian3(
-              0,
-              0,
-              Math.max(80, Math.min(2000, altitude * 0.015))
-            ),
-          },
-          point: {
-            pixelSize: p.onGround ? 7 : 8,
-            color: p.onGround
-              ? Cesium.Color.fromCssColorString("#f59e0b")
-              : Cesium.Color.fromCssColorString("#67e8f9"),
-            outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 1,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-          label: {
-            text: p.callsign || p.icao24,
-            font: "12px sans-serif",
-            showBackground: true,
-            backgroundColor: Cesium.Color.fromCssColorString("#111827cc"),
-            fillColor: Cesium.Color.WHITE,
-            horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
-            pixelOffset: new Cesium.Cartesian2(10, -10),
-            scale: 0.7,
-            disableDepthTestDistance: 1500000,
-          },
-          polyline: p.onGround
-            ? undefined
-            : {
-                positions: makeHeadingRayPositions(p, 18000),
-                width: 2,
-                material: Cesium.Color.fromCssColorString("#67e8f9").withAlpha(0.55),
-                clampToGround: false,
-              },
-        });
-
-        entityMap.set(p.id, entity);
-      } else {
-        entity.position = position as any;
-
-        if (entity.billboard) {
-          entity.billboard.image = (p.onGround
-            ? getGroundPlaneDataUrl("#f59e0b")
-            : getPlaneDataUrl("#67e8f9")) as any;
-          entity.billboard.rotation = Cesium.Math.toRadians((p.track ?? 0) - 90) as any;
-          entity.billboard.eyeOffset = new Cesium.Cartesian3(
-            0,
-            0,
-            Math.max(80, Math.min(2000, altitude * 0.015))
-          ) as any;
-        }
-
-        if (entity.point) {
-          entity.point.color = (
-            p.onGround
-              ? Cesium.Color.fromCssColorString("#f59e0b")
-              : Cesium.Color.fromCssColorString("#67e8f9")
-          ) as any;
-        }
-
-        if (entity.label) {
-          entity.label.text = (p.callsign || p.icao24) as any;
-        }
-
-        entity.polyline = p.onGround
-          ? undefined
-          : ({
-              positions: makeHeadingRayPositions(p, 18000),
-              width: 2,
-              material: Cesium.Color.fromCssColorString("#67e8f9").withAlpha(0.55),
-              clampToGround: false,
-            } as any);
-      }
-    }
-
-    const liveIds = new Set(points.map((p) => p.id));
-    for (const [id, entity] of entityMap.entries()) {
-      if (!liveIds.has(id)) {
-        entities.remove(entity);
-        entityMap.delete(id);
-      }
-    }
-
-    if (!hasInitialZoomRef.current && points.length > 0) {
-      flyToBounds(viewer, points);
-      hasInitialZoomRef.current = true;
-    }
-
+    syncCesiumVectors(overlay.dataSource, points);
     viewer.scene.requestRender();
   }, [points]);
 
@@ -178,91 +95,156 @@ export default function Globe3D({ points }: Props) {
     <div
       ref={containerRef}
       style={{
-        height: 520,
-        borderRadius: 16,
+        position: "relative",
+        width: "100%",
+        height: "100%",
         overflow: "hidden",
       }}
     />
   );
 }
 
-function normalizeAltitudeMeters(p: FlightPoint): number {
-  if (p.onGround) return 20;
-  if (typeof p.alt !== "number" || !Number.isFinite(p.alt)) return 2500;
-  return Math.max(250, p.alt);
-}
+function syncCesiumVectors(
+  dataSource: Cesium.CustomDataSource,
+  points: FlightPoint[]
+) {
+  const entities = dataSource.entities;
+  entities.removeAll();
 
-function flyToBounds(viewer: Cesium.Viewer, points: FlightPoint[]) {
-  if (!points.length) return;
-
-  let minLon = Number.POSITIVE_INFINITY;
-  let minLat = Number.POSITIVE_INFINITY;
-  let maxLon = Number.NEGATIVE_INFINITY;
-  let maxLat = Number.NEGATIVE_INFINITY;
+  addAtlRing(entities);
 
   for (const p of points) {
-    minLon = Math.min(minLon, p.lon);
-    minLat = Math.min(minLat, p.lat);
-    maxLon = Math.max(maxLon, p.lon);
-    maxLat = Math.max(maxLat, p.lat);
+    const category = classifyFlight(p);
+
+    if (category === "parked") {
+      addParkedPlaneEntity(entities, p);
+      continue;
+    }
+
+    addVectorEntity(entities, p, category);
+    addPlaneBillboardEntity(entities, p, category);
   }
+}
 
-  const padLon = Math.max(0.15, (maxLon - minLon) * 0.25);
-  const padLat = Math.max(0.12, (maxLat - minLat) * 0.25);
+function addVectorEntity(
+  entities: Cesium.EntityCollection,
+  p: FlightPoint,
+  category: FlightCategory
+) {
+  const positions = buildVectorPositions(p, category);
+  const color = Cesium.Color.fromCssColorString(FLIGHT_COLORS[category]);
 
-  const rect = Cesium.Rectangle.fromDegrees(
-    minLon - padLon,
-    minLat - padLat,
-    maxLon + padLon,
-    maxLat + padLat
-  );
-
-  viewer.camera.flyTo({
-    destination: rect,
-    duration: 1.2,
+  entities.add({
+    id: `${p.id}-vector`,
+    polyline: {
+      positions,
+      width: category === "arrival" ? 2.5 : 3.0,
+      material: color.withAlpha(category === "arrival" ? 0.95 : 0.88),
+      clampToGround: false,
+      arcType: Cesium.ArcType.NONE,
+    },
   });
 }
 
-function makeHeadingRayPositions(
+function addPlaneBillboardEntity(
+  entities: Cesium.EntityCollection,
   p: FlightPoint,
-  distanceMeters: number
+  category: FlightCategory
+) {
+  const startAltitude = normalizeAltitudeMeters(p.alt, p.onGround);
+  const image = getPlaneDataUrl(FLIGHT_COLORS[category]);
+
+  entities.add({
+    id: `${p.id}-plane`,
+    position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, startAltitude),
+    billboard: {
+      image,
+      scale: 0.55,
+      verticalOrigin: Cesium.VerticalOrigin.CENTER,
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      rotation: Cesium.Math.toRadians((p.track ?? 0) - 90),
+    },
+  });
+}
+
+function addParkedPlaneEntity(
+  entities: Cesium.EntityCollection,
+  p: FlightPoint
+) {
+  entities.add({
+    id: `${p.id}-parked`,
+    position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0),
+    billboard: {
+      image: getPlaneDataUrl(FLIGHT_COLORS.parked),
+      scale: 0.5,
+      verticalOrigin: Cesium.VerticalOrigin.CENTER,
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      rotation: Cesium.Math.toRadians((p.track ?? 0) - 90),
+    },
+  });
+}
+
+function buildVectorPositions(
+  p: FlightPoint,
+  category: FlightCategory
 ): Cesium.Cartesian3[] {
-  const startAlt = normalizeAltitudeMeters(p);
-  const end = projectForwardWgs84(
+  const startAlt = normalizeAltitudeMeters(p.alt, p.onGround);
+  const endAlt = vectorEndAltitudeMeters(startAlt, category);
+  const lengthMeters = globeVectorLengthMeters(p, category);
+
+  const endWgs84 = projectForwardWgs84(
     p.lat,
     p.lon,
     p.track ?? 0,
-    distanceMeters / 1000
+    lengthMeters / 1000
   );
 
   return [
     Cesium.Cartesian3.fromDegrees(p.lon, p.lat, startAlt),
-    Cesium.Cartesian3.fromDegrees(end.lon, end.lat, startAlt),
+    Cesium.Cartesian3.fromDegrees(endWgs84.lon, endWgs84.lat, endAlt),
   ];
 }
 
-function projectForwardWgs84(
-  latDeg: number,
-  lonDeg: number,
-  bearingDeg: number,
-  distKm: number
-) {
-  const R = 6371;
-  const phi1 = (latDeg * Math.PI) / 180;
-  const lambda1 = (lonDeg * Math.PI) / 180;
-  const theta = (bearingDeg * Math.PI) / 180;
-  const delta = distKm / R;
+function addAtlRing(entities: Cesium.EntityCollection) {
+  const ringPositions = buildAtlRingPositions({
+    centerLat: ATL.lat,
+    centerLon: ATL.lon,
+    radiusKm: 10,
+    heightMeters: 120,
+    samples: 96,
+  });
 
-  const sinPhi2 =
-    Math.sin(phi1) * Math.cos(delta) +
-    Math.cos(phi1) * Math.sin(delta) * Math.cos(theta);
-  const phi2 = Math.asin(sinPhi2);
+  entities.add({
+    id: "atl-ring",
+    polyline: {
+      positions: ringPositions,
+      width: 1.5,
+      material: Cesium.Color.fromCssColorString("#94a3b8").withAlpha(0.22),
+      clampToGround: false,
+      arcType: Cesium.ArcType.NONE,
+    },
+  });
+}
 
-  const y = Math.sin(theta) * Math.sin(delta) * Math.cos(phi1);
-  const x = Math.cos(delta) - Math.sin(phi1) * sinPhi2;
-  const lambda2 = lambda1 + Math.atan2(y, x);
+function buildAtlRingPositions(args: {
+  centerLat: number;
+  centerLon: number;
+  radiusKm: number;
+  heightMeters: number;
+  samples: number;
+}): Cesium.Cartesian3[] {
+  const { centerLat, centerLon, radiusKm, heightMeters, samples } = args;
+  const positions: Cesium.Cartesian3[] = [];
 
-  const lat = (phi2 * 180) / Math.PI;
-  const lon = (((lambda2 * 180) / Math.PI + 540) % 360) - 180;
-  return { lat, lon };
+  for (let i = 0; i <= samples; i += 1) {
+    const bearing = (i / samples) * 360;
+    const pt = projectForwardWgs84(centerLat, centerLon, bearing, radiusKm);
+    positions.push(
+      Cesium.Cartesian3.fromDegrees(pt.lon, pt.lat, heightMeters)
+    );
+  }
+
+  return positions;
 }
